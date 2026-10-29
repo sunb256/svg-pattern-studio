@@ -11,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 try:
+    from .gradient_actions import swap_gradient, restore_palette_gradient
     from .generator import FADES, KINDS, default_layer
     from .layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference, layer_warp_difference
     from .warp_presets import WARP_PRESETS, apply_warp_preset, warp_preset_name
@@ -19,6 +20,7 @@ try:
                               apply_composition)
     from .web_background import default_web_theme, make_web_pack, web_css, web_preview_html, web_presets, web_svgs
 except ImportError:
+    from gradient_actions import swap_gradient, restore_palette_gradient
     from generator import FADES, KINDS, default_layer
     from layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference, layer_warp_difference
     from warp_presets import WARP_PRESETS, apply_warp_preset, warp_preset_name
@@ -258,20 +260,13 @@ def _render_quick_composition() -> None:
         c2.color_picker("終了色", key="web-compose-bg-end", label_visibility="collapsed", on_change=_on_gradient_quick_change)
         st.slider("角度", 0, 360, key="web-compose-angle", step=5, on_change=_on_gradient_quick_change)
         r1, r2 = st.columns(2)
-        if r1.button("色を入れ替え", key="compose-swap-gradient", use_container_width=True):
-            start = st.session_state["web-compose-bg-start"]
-            end = st.session_state["web-compose-bg-end"]
-            st.session_state["web-compose-bg-start"] = end
-            st.session_state["web-compose-bg-end"] = start
-            _on_gradient_quick_change()
-            st.rerun()
-        if r2.button("配色に戻す", key="compose-reset-gradient", use_container_width=True):
-            palette = palettes[st.session_state["web-compose-palette"]]
-            st.session_state["web-compose-bg-start"] = palette["bg_start"]
-            st.session_state["web-compose-bg-end"] = palette["bg_end"]
-            st.session_state["web-compose-angle"] = int(palette["angle"])
-            _on_gradient_quick_change()
-            st.rerun()
+        # on_click callbacks run before the next render, so mutating widget
+        # session-state keys is legal. The old inline if-button handlers could
+        # raise StreamlitAPIException after color pickers had been instantiated.
+        r1.button("色を入れ替え", key="compose-swap-gradient", use_container_width=True,
+                  on_click=swap_gradient, args=(st.session_state,))
+        r2.button("配色に戻す", key="compose-reset-gradient", use_container_width=True,
+                  on_click=restore_palette_gradient, args=(st.session_state, palettes))
         st.button("ランダム", key="compose-random", use_container_width=True, on_click=_randomize_composition,
                   help="色合いとパターンセットの組み合わせをランダムに切り替えます。")
     if st.session_state.get("web-selection-mode") == "legacy":
@@ -550,11 +545,9 @@ def render_web_mode() -> None:
             st.session_state.web_rev += 1
             st.rerun()
         config["name"] = st.text_input("テーマ名", config["name"], key=f"web-{revision}-name")
-        a, b = st.columns(2)
-        config["bg_start"] = a.color_picker("背景色 1", config["bg_start"], key=f"web-{revision}-start")
-        config["bg_end"] = b.color_picker("背景色 2", config["bg_end"], key=f"web-{revision}-end")
-        config["angle"] = st.slider("グラデーション角度", 0, 360, int(config["angle"]), 5,
-                                     key=f"web-{revision}-angle")
+        # Gradient editing is centralized in the third quick-compose column.
+        # Keeping a second set of color pickers here caused stale widget values
+        # to overwrite the theme when the swap/reset callbacks were used.
         st.divider()
         st.subheader("ページプレビュー")
         viewport = st.selectbox("表示幅", [375, 768, 1280, 1920], index=2,
@@ -581,7 +574,6 @@ def render_web_mode() -> None:
     edit, preview = st.columns([1, 1.3], gap="large")
     with edit:
         if keep_preview:
-            st.caption("設定欄をスクロールしても、右側のプレビューは固定されます。")
             editor_root = st.container(height=work_height - 48, border=True)
         else:
             editor_root = st.container(border=False)
