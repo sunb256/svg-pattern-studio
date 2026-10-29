@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Noto Sans JP",sans-serif;color:#303847;color-scheme:light dark}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:transparent}
+#frame{padding:2px 4px 3px;height:435px;display:flex;flex-direction:column;gap:9px}
+.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#search{flex:1;min-width:190px;border:1px solid #abb5c3;border-radius:9px;padding:9px 11px;background:var(--secondary-background-color,#fff);color:var(--text-color,#222);font:inherit;font-size:13px}
+#result-count{font-size:12px;color:var(--text-color,#5a6373);white-space:nowrap}
+#grid{overflow-y:auto;overscroll-behavior:contain;flex:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));align-content:start;gap:11px;padding:3px 4px 8px 1px}
+.tile{position:relative;text-align:left;display:block;overflow:hidden;cursor:pointer;background:var(--secondary-background-color,#fff);border:2px solid transparent;border-radius:11px;padding:4px;color:var(--text-color,#303847);box-shadow:0 1px 5px #16203218;transition:border-color .12s,transform .12s}
+.tile:hover{border-color:#689bcf;transform:translateY(-1px)}
+.tile:focus-visible{outline:3px solid #357cc5;outline-offset:2px}
+.tile.active{border-color:#2381d4;box-shadow:0 0 0 1px #2381d4}
+.tile.active::before{content:'✓';position:absolute;right:7px;top:7px;display:grid;place-items:center;background:#1676bb;color:white;border-radius:50%;width:22px;height:22px;font-weight:bold;z-index:1}
+.tile img{display:block;width:100%;aspect-ratio:7 / 4;object-fit:cover;border-radius:6px;background:#d7dce4}
+.tile span{display:block;font-size:12px;line-height:1.45;padding:6px 3px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#empty{display:none;text-align:center;color:#777;font-size:13px;padding:32px}
+@media(prefers-color-scheme:dark){:root{color:#e5e8ee}#search{border-color:#545e6c}}
+</style>
+</head>
+<body>
+<div id="frame">
+  <div class="toolbar"><input id="search" type="search" placeholder="色名・模様名で絞り込み（例：グレー、波線）" aria-label="サンプルを検索"/><span id="result-count"></span></div>
+  <div id="grid" role="group" aria-label="背景サンプル一覧"></div>
+  <div id="empty">該当するテーマがありません。</div>
+</div>
+<script>
+"use strict";
+const grid = document.getElementById('grid');
+const input = document.getElementById('search');
+const count = document.getElementById('result-count');
+const empty = document.getElementById('empty');
+let items = [];
+let selectedName = '';
+let signature = '';
+let nextClick = 0;
+function send(type, value) {
+  const message = {isStreamlitMessage: true, type: 'streamlit:' + type};
+  if (type === 'componentReady') message.apiVersion = 1;
+  if (type === 'setComponentValue') {
+    message.value = value;
+    message.dataType = 'json';
+  }
+  if (type === 'setFrameHeight') message.height = value;
+  window.parent.postMessage(message, '*');
+}
+function setSelected(name) {
+  selectedName = name;
+  for (const b of grid.querySelectorAll('.tile')) {
+    const on = b.dataset.name === name;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+}
+function doFilter() {
+  const q = input.value.trim().toLocaleLowerCase();
+  let total = 0;
+  for (const b of grid.querySelectorAll('.tile')) {
+    const visible = !q || b.dataset.name.toLocaleLowerCase().includes(q);
+    b.hidden = !visible;
+    b.style.display = visible ? 'block' : 'none';
+    if (visible) total++;
+  }
+  count.textContent = `${total} / ${items.length}種類`;
+  empty.style.display = total ? 'none' : 'block';
+}
+function makeCards() {
+  grid.replaceChildren();
+  const fragment = document.createDocumentFragment();
+  for (const item of items) {
+    const button = document.createElement('button');
+    button.type='button';
+    button.className='tile';
+    button.dataset.name=item.name;
+    button.title=item.name+' を選択';
+    button.setAttribute('aria-label',item.name+' を編集する');
+    const img = document.createElement('img');
+    img.src=item.image;
+    img.alt='';
+    img.loading='lazy';
+    const name = document.createElement('span');
+    name.textContent=item.name;
+    button.append(img,name);
+    button.addEventListener('click',() => {
+      setSelected(item.name);
+      // A new event id is emitted on every click, even when reselecting the same theme.
+      const eventId = String(Date.now())+'-'+String(++nextClick);
+      send('setComponentValue',{name:item.name,event_id:eventId});
+    });
+    fragment.append(button);
+  }
+  grid.append(fragment);
+  setSelected(selectedName);
+  doFilter();
+}
+input.addEventListener('input',doFilter);
+window.addEventListener('message', ({data}) => {
+  if(!data || data.type !== 'streamlit:render') return;
+  const args=data.args || {};
+  const next=Array.isArray(args.items) ? args.items : [];
+  const nextSig=next.map(x=>x.name).join('\n');
+  selectedName=args.selected || '';
+  if (nextSig !== signature) {
+    signature = nextSig;
+    items = next;
+    makeCards();
+  } else {
+    setSelected(selectedName);
+  }
+  send('setFrameHeight',435);
+});
+send('componentReady');
+</script>
+</body>
+</html>

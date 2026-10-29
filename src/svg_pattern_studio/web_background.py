@@ -50,13 +50,13 @@ def default_web_theme() -> dict[str, Any]:
         "top": {
             "enabled": True, "width": 1600, "height": 480,
             "size": 115, "size_unit": "%", "align": "center", "inset": 0,
-            "anchor_y": "top", "shift_x": 0, "edge_feather": 15, "vertical_feather": 28,
+            "anchor_y": "top", "shift_x": 0, "edge_feather": 0, "vertical_feather": 28,
             "layers": [top_mesh, top_grid],
         },
         "bottom": {
             "enabled": True, "width": 1600, "height": 460,
             "size": 115, "size_unit": "%", "align": "center", "inset": 0,
-            "anchor_y": "bottom", "shift_x": 0, "edge_feather": 15, "vertical_feather": 28,
+            "anchor_y": "bottom", "shift_x": 0, "edge_feather": 0, "vertical_feather": 28,
             "layers": [bottom_wave, bottom_grid],
         },
     }
@@ -394,8 +394,97 @@ def web_presets() -> dict[str, dict[str, Any]]:
         copper, glacier, orbit, sakura, electric, sandstone, interference, cobalt, rose,
         light_gray, silver, charcoal, warm_gray, yellow, orange, red, lime, sky, ivory,
     )
-    return {theme["name"]: theme for theme in themes}
+    try:
+        from .more_presets import additional_presets
+    except ImportError:
+        from more_presets import additional_presets
+    presets = {theme["name"]: theme for theme in themes}
+    presets.update(additional_presets(ocean))
+    return _upgrade_presets(presets)
 
+
+
+
+# v0.13: expanded pattern family and automatic perspective styling.
+EXTRA_THEME_KINDS = [
+    "Diagonal stripes", "Concentric rings", "Ribbon bands",
+    "Diamond lattice", "Chevron field", "Sunburst rays",
+    "Nested rectangles", "Orbit ellipses", "Arc lattice",
+]
+
+
+def _apply_trapezoid_signature(layer: dict[str, Any], *, side: str, theme_index: int, layer_index: int) -> dict[str, Any]:
+    out = dict(layer)
+    if side == "top":
+        out["warp_top"] = 56 + ((theme_index * 7 + layer_index * 9) % 24)
+        out["warp_bottom"] = 118 + ((theme_index * 5 + layer_index * 7) % 24)
+        out["warp_top_shift"] = -18 + ((theme_index * 5 + layer_index * 11) % 22)
+        out["warp_bottom_shift"] = -10 + ((theme_index * 9 + layer_index * 7) % 20)
+    else:
+        out["warp_top"] = 62 + ((theme_index * 6 + layer_index * 7) % 28)
+        out["warp_bottom"] = 120 + ((theme_index * 8 + layer_index * 5) % 26)
+        out["warp_top_shift"] = -14 + ((theme_index * 4 + layer_index * 9) % 18)
+        out["warp_bottom_shift"] = -8 + ((theme_index * 6 + layer_index * 13) % 16)
+    # Strengthen the perspective a little for line-driven families.
+    if out.get("kind") in {"Flowing waves", "Curved grid", "Perspective fan", "Ribbon bands", "Arc lattice", "Diagonal stripes"}:
+        out["warp_top"] = max(42, int(out["warp_top"] * 0.92))
+        out["warp_bottom"] = min(160, int(out["warp_bottom"] * 1.05))
+    return out
+
+
+def _refresh_theme(theme: dict[str, Any], idx: int) -> dict[str, Any]:
+    cfg = deepcopy(theme)
+    cfg["top"]["vertical_feather"] = 30
+    cfg["bottom"]["vertical_feather"] = 32
+    cfg["top"]["edge_feather"] = 0
+    cfg["bottom"]["edge_feather"] = 0
+    # Vary the strip heights slightly so the new pattern families have room.
+    cfg["top"]["height"] = 460 + (idx % 3) * 20
+    cfg["bottom"]["height"] = 430 + ((idx + 1) % 3) * 24
+    for side in ("top", "bottom"):
+        layers = cfg[side].get("layers", [])
+        for li, layer in enumerate(layers):
+            # Reconsider the pattern family: every theme receives at least one
+            # of the new pattern kinds, often two, while preserving its palette.
+            if li == 1 or (li == 0 and idx % 5 == (0 if side == "top" else 2)):
+                layer["kind"] = EXTRA_THEME_KINDS[(idx * 2 + li + (0 if side == "top" else 3)) % len(EXTRA_THEME_KINDS)]
+                layer["density"] = max(14, int(layer.get("density", 20)) + (idx + li) % 8)
+                layer["scale"] = round(float(layer.get("scale", 1.0)) * (1.06 + ((idx + li) % 3) * 0.04), 3)
+                layer["rotation"] = int(layer.get("rotation", 0)) + ((idx * 9 + li * 13) % 24 - 12)
+            else:
+                layer["density"] = min(55, max(10, int(layer.get("density", 20)) + (idx + li) % 4))
+                layer["scale"] = round(float(layer.get("scale", 1.0)) * (1.03 + ((idx + li) % 2) * 0.03), 3)
+            if li == 0:
+                layer["blend"] = "screen"
+            elif idx % 4 == 0:
+                layer["blend"] = "overlay"
+            layer.update(_apply_trapezoid_signature(layer, side=side, theme_index=idx, layer_index=li))
+    return cfg
+
+
+def _upgrade_presets(presets: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    upgraded: dict[str, dict[str, Any]] = {}
+    echo_indices = {11, 19, 27, 35, 43, 51}
+    for idx, name in enumerate(list(presets.keys())):
+        cfg = _refresh_theme(presets[name], idx)
+        if idx in echo_indices:
+            side = "bottom" if idx % 2 else "top"
+            layers = cfg[side].get("layers", [])
+            if len(layers) >= 2:
+                src = dict(layers[0])
+                layers[1].update({
+                    "kind": src["kind"],
+                    "seed": src["seed"],
+                    "x": int(src.get("x", 0)) + 8,
+                    "y": int(src.get("y", 0)) + 4,
+                    "rotation": int(src.get("rotation", 0)) + 6,
+                    "opacity": round(max(0.12, float(src.get("opacity", 0.3)) * 0.72), 3),
+                    "scale": round(float(src.get("scale", 1.0)) * 1.03, 3),
+                    "blend": "overlay",
+                })
+                layers[1].update(_apply_trapezoid_signature(layers[1], side=side, theme_index=idx, layer_index=1))
+        upgraded[name] = cfg
+    return upgraded
 
 def suggested_text_color(config: dict[str, Any]) -> str:
     """Readable preview text for pale and dark gradients (based on top color)."""
@@ -516,21 +605,74 @@ def web_css(
 
 
 
+def _embedded_svg_urls(images: dict[str, str]) -> dict[str, str]:
+    """Make a standalone preview work without a local server or asset paths."""
+    return {
+        side: "data:image/svg+xml;base64," + base64.b64encode(
+            images[f"{side}.svg"].encode("utf-8")
+        ).decode("ascii")
+        for side in ("top", "bottom")
+    }
+
+
+def standalone_preview_html(
+    config: dict[str, Any], *,
+    urls: dict[str, str] | None = None,
+    initial_height: int = 1600,
+) -> str:
+    """The actual export preview.html, with optional embedded SVG asset URLs.
+
+    `urls=None` creates the portable ZIP version with sibling top.svg / bottom.svg.
+    Data URLs create an independent HTML document suitable for a browser Blob tab.
+    """
+    resolved_urls = urls if urls is not None else {
+        "top": "./top.svg", "bottom": "./bottom.svg",
+    }
+    if not 400 <= initial_height <= 6000:
+        raise ValueError("Invalid standalone preview height")
+    css = web_css(config, urls=resolved_urls)
+    name = escape(str(config["name"]))
+    return f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>preview.html — {name}</title>
+<style>html,body {{ margin:0; font-family:system-ui,sans-serif; }}
+{css}
+.demo {{ min-height:{initial_height}px; padding:40px 6%; box-sizing:border-box;
+  color:{suggested_text_color(config)}; }}
+.controls {{ position:fixed; z-index:10; bottom:12px; right:12px; padding:10px 14px;
+background:#16203bcc; color:white; border-radius:12px; }}
+.controls input {{ width:100px; }}
+</style></head><body>
+<div class="page-background demo" id="page"><h1>{name}</h1>
+<p>上部・下部の透明SVGをCSSグラデーションと合成しています。</p></div>
+<div class="controls"><label>ページ高さ (px): <input type="number" min="400" max="6000"
+value="{initial_height}" id="height"></label></div>
+<script>const field=document.getElementById('height');
+field.oninput=()=>{{const v=Number(field.value);if(v>=400&&v<=6000)
+document.getElementById('page').style.minHeight=v+'px';}};</script></body></html>"""
+
+
 def web_preview_html(
     config: dict[str, Any], *, viewport_width: int = 1280,
     page_height: int = 1500, fit: str = "whole",
 ) -> str:
-    """A responsive, self-contained Streamlit HTML preview with exact exported CSS."""
+    """Live iframe: click the page to open current standalone preview in a new tab.
+
+    The new tab uses a self-contained HTML Blob with inline SVG data URLs.
+    No server-side files, temporary local paths, or downloads are required.
+    The ZIP's preview.html is built by the same standalone_preview_html function.
+    """
     if not (320 <= viewport_width <= 2500 and 400 <= page_height <= 6000):
         raise ValueError("Invalid preview dimensions")
     if fit not in ("whole", "width"):
         raise ValueError("Invalid preview fit")
     images = web_svgs(config)
-    urls = {
-        side: "data:image/svg+xml;base64," + base64.b64encode(images[f"{side}.svg"].encode("utf-8")).decode("ascii")
-        for side in ("top", "bottom")
-    }
+    urls = _embedded_svg_urls(images)
     css = web_css(config, urls=urls)
+    # Keep every byte of the HTML isolated from the outer iframe script. In
+    # particular, a literal </script> inside a JS string would close the script.
+    standalone = standalone_preview_html(config, urls=urls, initial_height=page_height)
+    encoded_standalone = base64.b64encode(standalone.encode("utf-8")).decode("ascii")
     return f"""<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
@@ -538,7 +680,13 @@ def web_preview_html(
 html, body {{ padding:0; margin:0; font-family:system-ui,sans-serif; }}
 body {{ background:#EDF0F5; }}
 .stage {{ width:100%; padding:12px; height:100vh; overflow:auto; text-align:center; }}
+.open-preview {{ display:inline-block; vertical-align:top; color:inherit; text-decoration:none; cursor:zoom-in; }}
+.open-preview:focus-visible {{ outline:3px solid #1476e0; outline-offset:3px; }}
 .viewport {{ position:relative; margin:0 auto; box-shadow: 0 8px 28px #10162e38; }}
+.viewport::after {{ content:"クリックで別タブに表示"; position:absolute; top:12px; right:12px;
+  padding:5px 9px; background:#10162ed8; color:#fff; border-radius:6px;
+  font:12px system-ui,sans-serif; opacity:0; pointer-events:none; transition:opacity .14s; }}
+.open-preview:hover .viewport::after, .open-preview:focus-visible .viewport::after {{ opacity:1; }}
 .page-background {{ width:{viewport_width}px; height:{page_height}px; overflow:hidden; text-align:left;
   transform-origin:top left; color:{suggested_text_color(config)}; }}
 {css}
@@ -546,10 +694,13 @@ body {{ background:#EDF0F5; }}
 .preview-copy h1 {{ margin:0 0 12px; font-size:28px; line-height:1.25; }}
 .preview-copy p {{ margin:0; font-size:14px; opacity:.85; }}
 </style></head>
-<body><div class="stage" id="stage"><div class="viewport" id="frame">
+<body><div class="stage" id="stage">
+<a class="open-preview" id="openPreview" target="_blank" rel="noopener"
+   aria-label="現在の設定をpreview.htmlとして別タブに開く">
+<div class="viewport" id="frame">
 <div class="page-background" id="page"><div class="preview-copy">
 <h1>Web background preview</h1><p>{viewport_width} × {page_height}px — 上部と下部のSVGを独立配置</p>
-</div></div></div></div>
+</div></div></div></a></div>
 <script>
 const stage = document.getElementById('stage');
 const frame = document.getElementById('frame');
@@ -566,6 +717,13 @@ function resizePreview() {{
 resizePreview();
 window.addEventListener('resize', resizePreview);
 new ResizeObserver(resizePreview).observe(stage);
+// Base64 isolates the standalone HTML from the outer script and preserves Unicode.
+const standaloneBase64 = '{encoded_standalone}';
+const bytes = Uint8Array.from(atob(standaloneBase64), c => c.charCodeAt(0));
+const previewHtml = new TextDecoder('utf-8').decode(bytes);
+const previewUrl = URL.createObjectURL(new Blob([previewHtml], {{type:'text/html;charset=utf-8'}}));
+document.getElementById('openPreview').href = previewUrl;
+window.addEventListener('pagehide', () => URL.revokeObjectURL(previewUrl), {{once:true}});
 </script></body></html>"""
 
 
@@ -576,25 +734,9 @@ def make_web_pack(config: dict[str, Any]) -> bytes:
     manifest["format"] = "svg-pattern-studio-web-v3"
     manifest["suggested_text_color"] = suggested_text_color(config)
     manifest["files"] = {"top": "top.svg", "bottom": "bottom.svg", "css": "example.css"}
-    # The standalone preview uses relative references so users can open it locally.
-    relative_css = web_css(config, urls={"top": "./top.svg", "bottom": "./bottom.svg"})
-    html = f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Theme preview</title>
-<style>html,body {{ margin:0; font-family:system-ui,sans-serif; }}
-{relative_css}
-.demo {{ min-height:1600px; padding:40px 6%; box-sizing:border-box;
-  color:{suggested_text_color(config)}; }}
-.controls {{ position:fixed; z-index:10; bottom:12px; right:12px; padding:10px 14px;
-background:#16203bcc; border-radius:12px; }}
-.controls input {{ width:100px; }}
-</style></head><body>
-<div class="page-background demo" id="page"><h1>{escape(str(config['name']))}</h1>
-<p>上部・下部の透明SVGをCSSグラデーションと合成しています。</p></div>
-<div class="controls"><label>ページ高さ (px): <input type="number" min="400" max="6000"
-value="1600" id="height"></label></div>
-<script>const field=document.getElementById('height');
-field.oninput=()=>{{const v=Number(field.value);if(v>=400&&v<=6000)
-document.getElementById('page').style.minHeight=v+'px';}};</script></body></html>"""
+    # Same HTML template as the click-to-open preview, but relative asset URLs
+    # so the exported ZIP stays small and can be opened entirely offline.
+    html = standalone_preview_html(config)
     b = io.BytesIO()
     with zipfile.ZipFile(b, "w", zipfile.ZIP_DEFLATED) as z:
         for filename, svg in images.items():

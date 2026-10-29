@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+import json
 import random
 
 import streamlit as st
@@ -11,13 +12,19 @@ import streamlit.components.v1 as components
 
 try:
     from .generator import FADES, KINDS, default_layer
-    from .layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference
+    from .layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference, layer_warp_difference
+    from .warp_presets import WARP_PRESETS, apply_warp_preset, warp_preset_name
     from .preset_tools import apply_web_preset
+    from .composition import (PATTERN_SETS, DEFAULT_PATTERN, palette_catalog,
+                              apply_composition)
     from .web_background import default_web_theme, make_web_pack, web_css, web_preview_html, web_presets, web_svgs
 except ImportError:
     from generator import FADES, KINDS, default_layer
-    from layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference
+    from layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference, layer_warp_difference
+    from warp_presets import WARP_PRESETS, apply_warp_preset, warp_preset_name
     from preset_tools import apply_web_preset
+    from composition import (PATTERN_SETS, DEFAULT_PATTERN, palette_catalog,
+                             apply_composition)
     from web_background import default_web_theme, make_web_pack, web_css, web_preview_html, web_presets, web_svgs
 
 PATTERN_NAMES = {
@@ -25,7 +32,12 @@ PATTERN_NAMES = {
     "Organic contours": "等高線", "Triangle mesh": "三角形メッシュ",
     "Radiating arcs": "放射状の円弧", "Spirograph": "スピログラフ",
     "Perspective fan": "交差する扇状曲線", "Hexagon grid": "六角形グリッド",
-    "Dot field": "ドット", "None": "なし", "To right": "右方向に消える",
+    "Dot field": "ドット",
+    "Diagonal stripes": "斜めストライプ", "Concentric rings": "同心リング",
+    "Ribbon bands": "リボン束", "Diamond lattice": "ひし形格子",
+    "Chevron field": "シェブロン", "Sunburst rays": "サンバースト",
+    "Nested rectangles": "入れ子長方形", "Orbit ellipses": "軌道楕円",
+    "Arc lattice": "円弧ラティス", "None": "なし", "To right": "右方向に消える",
     "To left": "左方向に消える", "To bottom": "下方向に消える",
     "To top": "上方向に消える", "Center focus": "周辺に消える",
 }
@@ -55,6 +67,49 @@ def _on_preset_change() -> None:
     the same new configuration immediately, without a separate apply button.
     """
     apply_web_preset(st.session_state, st.session_state["web-selected-preset"])
+    st.session_state["web-selection-mode"] = "legacy"
+
+
+# A tiny self-contained Streamlit component: clicking the thumbnail itself
+# sends an event back to Python. Thumbnails are shipped as static assets,
+# so browsing the catalogue does not trigger 56 SVG renders on every rerun.
+GALLERY_DIR = Path(__file__).resolve().parent / "assets" / "preset-gallery"
+selectable_gallery = components.declare_component(
+    "svg_pattern_selectable_gallery_v09", path=str(GALLERY_DIR)
+)
+
+
+def _render_theme_gallery(presets: dict) -> None:
+    """Render clickable thumbnails and synchronize selection with the sidebar."""
+    with st.expander(f"{len(presets)}種類の背景デザインを一覧表示・クリックして選択", expanded=False):
+        selected = st.session_state.get("web-selected-preset", next(iter(presets)))
+        entries = json.loads((GALLERY_DIR / "catalog.json").read_text(encoding="utf-8"))
+        click = selectable_gallery(
+            items=entries, selected=selected, default=None,
+            key="web-theme-gallery", height=435,
+        )
+        if isinstance(click, dict):
+            name = click.get("name")
+            event_id = click.get("event_id")
+            if (name in presets and event_id and
+                    event_id != st.session_state.get("web-gallery-last-event")):
+                st.session_state["web-gallery-last-event"] = event_id
+                st.session_state["web-selected-preset"] = name
+                apply_web_preset(st.session_state, name)
+                st.session_state["web-selection-mode"] = "legacy"
+                st.rerun()
+        st.caption("以前のサンプルを読み込むと、そのデザインで編集できます。新しい3カラム選択を変更すると、組み合わせ式のデザインに切り替わります。")
+
+
+def _on_warp_preset_change(side: str, index: int, key: str) -> None:
+    name = st.session_state[key]
+    if name == "自由調整":
+        return
+    conf = deepcopy(st.session_state.web_config)
+    conf[side]["layers"][index] = apply_warp_preset(conf[side]["layers"][index], name)
+    st.session_state.web_config = conf
+    st.session_state.web_focus = (side, index)
+    st.session_state.web_rev += 1
 
 
 def _init() -> None:
@@ -65,6 +120,162 @@ def _init() -> None:
     if "web_focus" not in st.session_state:
         st.session_state.web_focus = None
 
+
+
+
+def _init_quick_composition() -> None:
+    """Seed independent controls exactly once per Streamlit session."""
+    palettes = palette_catalog()
+    if "web-compose-palette" not in st.session_state:
+        st.session_state["web-compose-palette"] = next(iter(palettes))
+    if "web-compose-pattern" not in st.session_state:
+        st.session_state["web-compose-pattern"] = DEFAULT_PATTERN
+    if "web-selection-mode" not in st.session_state:
+        _apply_palette_and_pattern(reset_gradient=True)
+
+
+def _apply_palette_and_pattern(*, reset_gradient: bool) -> None:
+    apply_composition(
+        st.session_state,
+        palette_name=st.session_state["web-compose-palette"],
+        pattern_name=st.session_state["web-compose-pattern"],
+    )
+    st.session_state["web-selection-mode"] = "compose"
+    if not reset_gradient:
+        return
+    palette = palette_catalog()[st.session_state["web-compose-palette"]]
+    conf = deepcopy(st.session_state.web_config)
+    conf["bg_start"] = palette["bg_start"]
+    conf["bg_end"] = palette["bg_end"]
+    conf["angle"] = palette["angle"]
+    st.session_state.web_config = conf
+
+
+def _on_palette_change() -> None:
+    _apply_palette_and_pattern(reset_gradient=True)
+
+
+def _on_pattern_change() -> None:
+    current = deepcopy(st.session_state.web_config)
+    start = current.get("bg_start")
+    end = current.get("bg_end")
+    angle = current.get("angle")
+    _apply_palette_and_pattern(reset_gradient=False)
+    conf = deepcopy(st.session_state.web_config)
+    conf["bg_start"] = start
+    conf["bg_end"] = end
+    conf["angle"] = angle
+    st.session_state.web_config = conf
+
+
+def _on_gradient_quick_change() -> None:
+    conf = deepcopy(st.session_state.web_config)
+    conf["bg_start"] = st.session_state["web-compose-bg-start"]
+    conf["bg_end"] = st.session_state["web-compose-bg-end"]
+    conf["angle"] = int(st.session_state["web-compose-angle"])
+    st.session_state.web_config = conf
+    st.session_state.web_rev += 1
+
+
+def _sync_quick_gradient_from_config() -> None:
+    st.session_state["web-compose-bg-start"] = st.session_state.web_config.get("bg_start", "#14246B")
+    st.session_state["web-compose-bg-end"] = st.session_state.web_config.get("bg_end", "#206CA8")
+    st.session_state["web-compose-angle"] = int(st.session_state.web_config.get("angle", 145))
+
+
+def _step_composition(key: str, names: list[str], delta: int, mode: str) -> None:
+    current = st.session_state[key]
+    st.session_state[key] = names[(names.index(current) + delta) % len(names)]
+    if mode == "palette":
+        _on_palette_change()
+    else:
+        _on_pattern_change()
+
+
+
+
+def _randomize_composition() -> None:
+    palettes = list(palette_catalog())
+    patterns = list(PATTERN_SETS)
+    current = (st.session_state.get("web-compose-palette"), st.session_state.get("web-compose-pattern"))
+    # Try several times to avoid repeating the same combination.
+    for _ in range(12):
+        palette = random.choice(palettes)
+        pattern = random.choice(patterns)
+        if (palette, pattern) != current:
+            break
+    st.session_state["web-compose-palette"] = palette
+    st.session_state["web-compose-pattern"] = pattern
+    _apply_palette_and_pattern(reset_gradient=True)
+
+def _render_quick_composition() -> None:
+    """Three selectors: palette, pattern set, and gradient fine tuning."""
+    palettes = palette_catalog()
+    _sync_quick_gradient_from_config()
+    left, center, right = st.columns([1, 1.15, 1], gap="medium")
+    with left:
+        st.markdown("**色合い**")
+        chosen = st.selectbox(
+            "色合いを選択", list(palettes), key="web-compose-palette",
+            on_change=_on_palette_change,
+            label_visibility="collapsed",
+        )
+        palette = palettes[chosen]
+        start, end = palette["bg_start"], palette["bg_end"]
+        st.markdown(
+            f'<div role="img" aria-label="{chosen}の配色" style="height:38px;'
+            f'border-radius:8px;border:1px solid #8885;'
+            f'background:linear-gradient(120deg,{start},{end})"></div>',
+            unsafe_allow_html=True,
+        )
+        prev, nex = st.columns(2)
+        prev.button("◀ 前の色", key="compose-prev-palette", use_container_width=True,
+                    on_click=_step_composition, args=("web-compose-palette", list(palettes), -1, "palette"))
+        nex.button("次の色 ▶", key="compose-next-palette", use_container_width=True,
+                   on_click=_step_composition, args=("web-compose-palette", list(palettes), 1, "palette"))
+    with center:
+        st.markdown("**パターンセット**")
+        selected = st.selectbox(
+            "パターンセットを選択", list(PATTERN_SETS), key="web-compose-pattern",
+            on_change=_on_pattern_change,
+            label_visibility="collapsed",
+        )
+        top_kind, top_count = PATTERN_SETS[selected]["top"]
+        bottom_kind, bottom_count = PATTERN_SETS[selected]["bottom"]
+        top_label = PATTERN_NAMES[top_kind] + (" ×2" if top_count == 2 else "")
+        bottom_label = PATTERN_NAMES[bottom_kind] + (" ×2" if bottom_count == 2 else "")
+        st.caption(f"上：{top_label}")
+        st.caption(f"下：{bottom_label}")
+        prev, nex = st.columns(2)
+        prev.button("◀ 前の模様", key="compose-prev-pattern", use_container_width=True,
+                    on_click=_step_composition, args=("web-compose-pattern", list(PATTERN_SETS), -1, "pattern"))
+        nex.button("次の模様 ▶", key="compose-next-pattern", use_container_width=True,
+                   on_click=_step_composition, args=("web-compose-pattern", list(PATTERN_SETS), 1, "pattern"))
+    with right:
+        st.markdown("**グラデーション調整**")
+        c1, c2 = st.columns(2)
+        c1.color_picker("開始色", key="web-compose-bg-start", label_visibility="collapsed", on_change=_on_gradient_quick_change)
+        c2.color_picker("終了色", key="web-compose-bg-end", label_visibility="collapsed", on_change=_on_gradient_quick_change)
+        st.slider("角度", 0, 360, key="web-compose-angle", step=5, on_change=_on_gradient_quick_change)
+        r1, r2 = st.columns(2)
+        if r1.button("色を入れ替え", key="compose-swap-gradient", use_container_width=True):
+            start = st.session_state["web-compose-bg-start"]
+            end = st.session_state["web-compose-bg-end"]
+            st.session_state["web-compose-bg-start"] = end
+            st.session_state["web-compose-bg-end"] = start
+            _on_gradient_quick_change()
+            st.rerun()
+        if r2.button("配色に戻す", key="compose-reset-gradient", use_container_width=True):
+            palette = palettes[st.session_state["web-compose-palette"]]
+            st.session_state["web-compose-bg-start"] = palette["bg_start"]
+            st.session_state["web-compose-bg-end"] = palette["bg_end"]
+            st.session_state["web-compose-angle"] = int(palette["angle"])
+            _on_gradient_quick_change()
+            st.rerun()
+        st.button("ランダム", key="compose-random", use_container_width=True, on_click=_randomize_composition,
+                  help="色合いとパターンセットの組み合わせをランダムに切り替えます。")
+    if st.session_state.get("web-selection-mode") == "legacy":
+        st.caption("以前のデザイン例を編集中です。上の選択肢を変更すると、新しい組み合わせ式のデザインへ切り替わります。")
 
 def _change_zone(side: str, op: str, index: int = -1, *, target: int = -1,
                  dx: int = 0, dy: int = 0, drotation: int = 0) -> None:
@@ -147,61 +358,20 @@ def _zone_editor(side: str, zone: dict, revision: int) -> dict:
         help="上配置なら下方向、下配置なら上方向、中央なら下方向に動きます。",
     ))
 
-    st.markdown("**2. 横幅・線切れ対策**")
-    width_mode = (
-        "固定幅" if zone["size_unit"] == "px" else
-        "画面幅に合わせる" if zone["size"] == 100 else
-        "画面より広く" if zone["size"] == 115 else "カスタム"
-    )
-    sizing = st.radio(
-        "横幅の指定", ["画面幅に合わせる", "画面より広く", "固定幅", "カスタム"],
-        index=["画面幅に合わせる", "画面より広く", "固定幅", "カスタム"].index(width_mode),
-        key=f"{key}-width-mode",
-        help="おすすめは画面幅以上。線は移動・回転後の表示範囲まで生成され、画面端で自然に消えます。",
-    )
-    if sizing == "画面幅に合わせる":
-        zone["size_unit"], zone["size"] = "%", 100
-    elif sizing == "画面より広く":
-        zone["size_unit"], zone["size"] = "%", 115
-    elif sizing == "固定幅":
-        if zone["size_unit"] != "px":
-            zone["size"] = 1200
-        zone["size_unit"] = "px"
-        zone["size"] = int(st.number_input(
-            "表示幅 (px)", 100, 4000, int(zone["size"]), 50, key=f"{key}-pixel-width",
-        ))
-    else:
-        unit = st.selectbox(
-            "単位", ["%", "px"], index=["%", "px"].index(zone["size_unit"]),
-            key=f"{key}-custom-unit",
-        )
-        old_size = int(zone["size"])
-        if unit != zone["size_unit"]:
-            old_size = 100 if unit == "%" else 1200
-        zone["size_unit"] = unit
-        zone["size"] = int(st.number_input(
-            "表示幅", min_value=10 if unit == "%" else 100,
-            max_value=250 if unit == "%" else 4000, value=old_size,
-            step=5 if unit == "%" else 50, key=f"{key}-custom-size-{unit}",
-        ))
-    if ((zone["size_unit"] == "%" and zone["size"] < 100)
-            or zone["size_unit"] == "px"):
-        st.info("固定幅や100%未満では、画像そのものの端がページ内に見える場合があります。"
-                "ページ全体を途切れず覆うには「画面幅に合わせる」か「画面より広く」を選択してください。")
+    # Web背景では表示幅を画面より少し広い115%に固定します。
+    # 固定pxや100%未満は画像の境界がページ内に現れるため、UIから除外します。
+    zone["size_unit"], zone["size"] = "%", 115
+    st.markdown("**2. フェード**")
     zone["edge_feather"] = st.slider(
-        "Webページの左右端を自然に消す (%)", 0, 40, int(zone.get("edge_feather", 10)), 1,
+        "左右端のフェード (%)", 0, 40, int(zone.get("edge_feather", 0)), 1,
         key=f"{key}-edge-feather",
-        help="SVGを115%に拡大しても、実際に表示される画面の端を基準にフェードします。",
+        help="Webページの左右端を基準に、模様を徐々に透明にします。0%で無効です。",
     )
     zone["vertical_feather"] = st.slider(
-        "模様の上下境界をなめらかに消す (%)", 0, 50,
+        "上下端のフェード (%)", 0, 50,
         int(zone.get("vertical_feather", 28)), 1, key=f"{key}-vertical-feather",
-        help="上部SVGなら下辺、下部SVGなら上辺から自然に消すため、画像の境界が横線になりません。",
+        help="上部装飾は下端、下部装飾は上端を徐々に透明にします。0%で無効です。",
     )
-    with st.expander("SVGキャンバスの縦横比（通常は変更不要）", expanded=False):
-        a, b = st.columns(2)
-        zone["width"] = int(a.number_input("SVG横幅 (px)", 200, 6000, int(zone["width"]), 50, key=f"{key}-w"))
-        zone["height"] = int(b.number_input("SVG高さ (px)", 200, 6000, int(zone["height"]), 50, key=f"{key}-h"))
 
     st.markdown("**3. 模様のレイヤー**")
 
@@ -274,6 +444,20 @@ def _zone_editor(side: str, zone: dict, revision: int) -> dict:
             layer["y"] = b.slider("上下移動 (%)", -100, 100, int(layer["y"]), 1, key=f"{lk}-y")
             layer["rotation"] = st.slider("回転角度", -180, 180, int(layer["rotation"]), 1,
                                            key=f"{lk}-rotation")
+            with st.popover("台形変形・傾き（遠近感）", use_container_width=True):
+                st.caption("形を選ぶだけでも変形できます。複製レイヤーごとに違う角度を指定できます。")
+                shape_names = list(WARP_PRESETS) + ["自由調整"]
+                st.selectbox("変形パターン", shape_names,
+                             index=shape_names.index(warp_preset_name(layer)),
+                             key=f"{lk}-warp-shape", on_change=_on_warp_preset_change,
+                             args=(side, i, f"{lk}-warp-shape"))
+                cc1, cc2 = st.columns(2)
+                layer["warp_top"] = cc1.slider("上辺の幅 (%)", 40, 160, int(layer.get("warp_top", 100)), 2, key=f"{lk}-warp-top")
+                layer["warp_bottom"] = cc2.slider("下辺の幅 (%)", 40, 160, int(layer.get("warp_bottom", 100)), 2, key=f"{lk}-warp-bottom")
+                cc3, cc4 = st.columns(2)
+                layer["warp_top_shift"] = cc3.slider("上辺の横ずれ (%)", -50, 50, int(layer.get("warp_top_shift", 0)), 1, key=f"{lk}-warp-top-shift")
+                layer["warp_bottom_shift"] = cc4.slider("下辺の横ずれ (%)", -50, 50, int(layer.get("warp_bottom_shift", 0)), 1, key=f"{lk}-warp-bottom-shift")
+                st.caption("例：上辺70%・下辺130%で下に広がる台形。複製後に差をつけると立体的な交差模様になります。")
             layer["fade"] = st.selectbox("消え方", FADES, index=FADES.index(layer["fade"]),
                                          format_func=lambda x: PATTERN_NAMES[x], key=f"{lk}-fade")
             layer["seed"] = int(st.number_input("ランダム値 (seed)", 0, 99999,
@@ -321,6 +505,9 @@ def _zone_editor(side: str, zone: dict, revision: int) -> dict:
                     st.caption(f"レイヤー{source_i+1} → レイヤー{i+1}")
                     st.write(f"左右 {diff['dx']:+d}% / 上下 {diff['dy']:+d}% / "
                              f"角度 {diff['drotation']:+d}° / 拡大率 {diff['dscale']:+d}%")
+                    warp_diff = layer_warp_difference(peer, layer)
+                    st.caption(f"台形差：上辺 {warp_diff['dwarp_top']:+d}% / 下辺 {warp_diff['dwarp_bottom']:+d}% / "
+                               f"上辺ずれ {warp_diff['dwarp_top_shift']:+d}% / 下辺ずれ {warp_diff['dwarp_bottom_shift']:+d}%")
                     st.caption("同じ形を維持" if diff["same_geometry"] else "模様の種類・seed・密度が異なります")
             a, b, c = st.columns(3)
             if a.button("↑ 手前", key=f"{lk}-up", disabled=i==len(zone["layers"])-1,
@@ -337,24 +524,23 @@ def _zone_editor(side: str, zone: dict, revision: int) -> dict:
 
 def render_web_mode() -> None:
     _init()
+    _init_quick_composition()
     st.title("SVG Pattern Studio — Web背景モード")
+    _render_quick_composition()
     presets = web_presets()
-    st.caption(f"{len(presets)}種類のデザイン例。色名＋模様名で選べます。選択すると即時に切り替わります。")
-    with st.expander(f"{len(presets)}種類の背景デザインを一覧表示", expanded=False):
-        gallery = Path(__file__).resolve().parent / "assets" / "design-gallery.png"
-        if gallery.is_file():
-            st.image(str(gallery), use_column_width=True)
-        st.caption("サイドバーの「デザイン例」を変更すると即時に反映します。現在の調整内容は置き換わります。")
+    # Keep the previous 56 clickable designs, without crowding the three-column UI.
+    _render_theme_gallery(presets)
 
     config = deepcopy(st.session_state.web_config)
     revision = st.session_state.web_rev
     with st.sidebar:
         st.subheader("Web背景の設定")
-        st.selectbox(
-            "デザイン例", list(presets), key="web-selected-preset",
-            on_change=_on_preset_change,
-            help="選択を変更すると即座にテーマが切り替わります。未保存の調整は上書きされます。",
-        )
+        with st.expander("以前のデザイン例（56種類）", expanded=False):
+            st.selectbox(
+                "デザイン例", list(presets), key="web-selected-preset",
+                on_change=_on_preset_change,
+                help="従来のサンプルを読み込みます。現在の調整は置き換わります。",
+            )
         if st.button("模様のランダム値を変更", key="web-randomize", use_container_width=True):
             fresh = deepcopy(st.session_state.web_config)
             for side in ("top", "bottom"):
@@ -386,7 +572,7 @@ def render_web_mode() -> None:
             help="設定欄だけをスクロールし、右側のプレビューを見ながら調整します。",
         )
         work_height = st.select_slider(
-            "作業エリアの高さ", options=[480, 560, 640, 720], value=560,
+            "作業エリアの高さ", options=[480, 560, 640, 720], value=720,
             format_func=lambda n: f"{n}px", key="web-work-area-height",
         ) if keep_preview else 640
 
@@ -410,10 +596,9 @@ def render_web_mode() -> None:
     st.session_state.web_config = deepcopy(config)
     with preview:
         with st.container(border=False):
-            st.subheader("Webページのライブプレビュー")
             html = web_preview_html(config, viewport_width=viewport, page_height=height, fit=fit)
             components.html(html, height=work_height - 75 if keep_preview else 640, scrolling=False)
-            st.caption(f"ページ {viewport} × {height}px。模様の配置は書き出しCSSと同じ設定です。")
+            st.caption(f"ページ {viewport} × {height}px。プレビューをクリックすると、現在の設定を preview.html として別タブで開きます。")
 
     # Keep export actions outside the preview column, so it is short enough to
     # remain in the viewport while the user works through the long layer editor.

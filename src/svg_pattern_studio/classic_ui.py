@@ -14,9 +14,11 @@ import streamlit.components.v1 as components
 
 from generator import FADES, KINDS, PRESETS, default_layer, preset_layers, render_svg
 try:
-    from .layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference
+    from .layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference, layer_warp_difference
+    from .warp_presets import WARP_PRESETS, apply_warp_preset, warp_preset_name
 except ImportError:
-    from layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference
+    from layer_tools import copy_layer, duplicate_layer, nudge_layer, layer_difference, layer_warp_difference
+    from warp_presets import WARP_PRESETS, apply_warp_preset, warp_preset_name
 
 
 SIZES = {
@@ -122,6 +124,17 @@ def make_pack(width: int, height: int, layers: list[dict], bg_start: str, bg_end
     return bio.getvalue()
 
 
+def _on_classic_warp_change(index: int, key: str) -> None:
+    name = st.session_state[key]
+    if name == "自由調整":
+        return
+    layers = deepcopy(st.session_state.layers)
+    layers[index] = apply_warp_preset(layers[index], name)
+    st.session_state.layers = layers
+    st.session_state.layer_focus = index
+    st.session_state.layer_revision += 1
+
+
 def render_classic_mode() -> None:
     init_state()
     st.title("SVG Pattern Studio")
@@ -206,6 +219,19 @@ def render_classic_mode() -> None:
                 x = c1.slider("左右位置 (%)", -100, 100, int(layer["x"]), 5, key=f"{prefix}-x")
                 y = c2.slider("上下位置 (%)", -100, 100, int(layer["y"]), 5, key=f"{prefix}-y")
                 rotation = st.slider("回転 (°)", -180, 180, int(layer["rotation"]), 5, key=f"{prefix}-rot")
+                with st.popover("台形変形・傾き（遠近感）", use_container_width=True):
+                    st.caption("変形パターンの選択で即時反映。スライダーでさらに微調整できます。")
+                    shape_names = list(WARP_PRESETS) + ["自由調整"]
+                    st.selectbox("変形パターン", shape_names,
+                                 index=shape_names.index(warp_preset_name(layer)),
+                                 key=f"{prefix}-warp-shape", on_change=_on_classic_warp_change,
+                                 args=(i, f"{prefix}-warp-shape"))
+                    cc1, cc2 = st.columns(2)
+                    warp_top = cc1.slider("上辺の幅 (%)", 40, 160, int(layer.get("warp_top", 100)), 2, key=f"{prefix}-warp-top")
+                    warp_bottom = cc2.slider("下辺の幅 (%)", 40, 160, int(layer.get("warp_bottom", 100)), 2, key=f"{prefix}-warp-bottom")
+                    cc3, cc4 = st.columns(2)
+                    warp_top_shift = cc3.slider("上辺の横ずれ (%)", -50, 50, int(layer.get("warp_top_shift", 0)), 1, key=f"{prefix}-warp-top-shift")
+                    warp_bottom_shift = cc4.slider("下辺の横ずれ (%)", -50, 50, int(layer.get("warp_bottom_shift", 0)), 1, key=f"{prefix}-warp-bottom-shift")
                 fade = st.selectbox("フェード方向", FADES, index=FADES.index(layer["fade"]),
                                     format_func=lambda k: JAPANESE[k], key=f"{prefix}-fade")
                 seed = int(st.number_input("形のランダム値（seed）", 0, 99999,
@@ -261,6 +287,12 @@ def render_classic_mode() -> None:
                         diff = layer_difference(reference, current)
                         st.write(f"左右 {diff['dx']:+d}% / 上下 {diff['dy']:+d}% / "
                                  f"角度 {diff['drotation']:+d}° / 拡大率 {diff['dscale']:+d}%")
+                        warp_diff = layer_warp_difference(reference, current | {
+                            "warp_top": warp_top, "warp_bottom": warp_bottom,
+                            "warp_top_shift": warp_top_shift, "warp_bottom_shift": warp_bottom_shift,
+                        })
+                        st.caption(f"台形差：上辺 {warp_diff['dwarp_top']:+d}% / 下辺 {warp_diff['dwarp_bottom']:+d}% / "
+                                   f"上辺ずれ {warp_diff['dwarp_top_shift']:+d}% / 下辺ずれ {warp_diff['dwarp_bottom_shift']:+d}%")
                         st.caption("同じ形を維持" if diff["same_geometry"] else "模様の種類・seed・密度が異なります")
                 move_left, move_right = st.columns(2)
                 if move_left.button("↑ 手前へ（順序変更）", key=f"{prefix}-up", disabled=i==len(st.session_state.layers)-1,
@@ -277,6 +309,8 @@ def render_classic_mode() -> None:
                     "enabled": enabled, "kind": kind, "color": color, "opacity": opacity/100,
                     "blend": blend, "density": density, "width": linewidth, "scale": scale/100,
                     "x": x, "y": y, "rotation": rotation, "fade": fade, "seed": seed,
+                    "warp_top": warp_top, "warp_bottom": warp_bottom,
+                    "warp_top_shift": warp_top_shift, "warp_bottom_shift": warp_bottom_shift,
                 })
         st.session_state.layers = edited_layers
 

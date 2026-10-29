@@ -80,3 +80,13 @@ def layer_difference(source: dict[str, Any], target: dict[str, Any]) -> dict[str
         "same_geometry": all(source[field] == target[field]
                              for field in ("kind", "seed", "density")),
     }
+
+
+def layer_warp_difference(source: dict[str, Any], target: dict[str, Any]) -> dict[str, int]:
+    """Trapezoid-only deltas, keeping legacy layer_difference API unchanged."""
+    return {
+        "dwarp_top": int(target.get("warp_top", 100) - source.get("warp_top", 100)),
+        "dwarp_bottom": int(target.get("warp_bottom", 100) - source.get("warp_bottom", 100)),
+        "dwarp_top_shift": int(target.get("warp_top_shift", 0) - source.get("warp_top_shift", 0)),
+        "dwarp_bottom_shift": int(target.get("warp_bottom_shift", 0) - source.get("warp_bottom_shift", 0)),
+    }

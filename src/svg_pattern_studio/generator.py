@@ -10,6 +10,11 @@ import math
 import random
 from typing import Any
 
+try:
+    from .warp import warp_enabled, warp_shapes, untransformed_point
+except ImportError:
+    from warp import warp_enabled, warp_shapes, untransformed_point
+
 TAU = math.tau
 KINDS = (
     "Flowing waves",
@@ -21,6 +26,15 @@ KINDS = (
     "Perspective fan",
     "Hexagon grid",
     "Dot field",
+    "Diagonal stripes",
+    "Concentric rings",
+    "Ribbon bands",
+    "Diamond lattice",
+    "Chevron field",
+    "Sunburst rays",
+    "Nested rectangles",
+    "Orbit ellipses",
+    "Arc lattice",
 )
 FADES = ("None", "To right", "To left", "To bottom", "To top", "Center focus")
 
@@ -82,6 +96,8 @@ def default_layer(kind: str = "Flowing waves", seed: int = 1) -> dict[str, Any]:
         "enabled": True, "kind": kind, "color": "#B3DFFF", "opacity": .38,
         "density": 24, "width": 1.0, "scale": 1.0, "x": 0, "y": 0,
         "rotation": 0, "fade": "None", "seed": seed,
+        "warp_top": 100, "warp_bottom": 100,
+        "warp_top_shift": 0, "warp_bottom_shift": 0,
     }
 
 
@@ -255,6 +271,157 @@ def _hexagon_grid(w: int, h: int, n: int, rng: random.Random) -> list[str]:
     return paths
 
 
+
+
+def _diagonal_stripes(w: int, h: int, n: int, rng: random.Random) -> list[str]:
+    paths=[]
+    slope = rng.uniform(0.45, 1.05)
+    spacing = max(12, (w + h) / max(8, n + 3))
+    offset0 = -1.4 * h
+    offset1 = 1.4 * w
+    start = int(-(h * 1.6) / spacing) - 2
+    end = int((w * 1.8) / spacing) + 3
+    for i in range(start, end):
+        off = i * spacing + rng.uniform(-0.18, 0.18) * spacing
+        x1 = off
+        y1 = -0.25 * h
+        x2 = off - slope * (1.65 * h)
+        y2 = 1.40 * h
+        paths.append(_path([(x1, y1), (x2, y2)]))
+    return paths
+
+
+def _concentric_rings(w: int, h: int, n: int, rng: random.Random) -> list[str]:
+    rings=[]
+    cx = w * (0.38 + rng.uniform(-0.08, 0.08))
+    cy = h * (0.44 + rng.uniform(-0.08, 0.08))
+    count = max(6, n)
+    for i in range(count):
+        t = (i + 1) / count
+        rx = w * (0.04 + 0.72 * t)
+        ry = h * (0.05 + 0.70 * t)
+        rings.append(f'<ellipse cx="{cx:.1f}" cy="{cy:.1f}" rx="{rx:.1f}" ry="{ry:.1f}"/>')
+    return rings
+
+
+def _ribbon_bands(w: int, h: int, n: int, rng: random.Random) -> list[str]:
+    paths=[]
+    phase = rng.random() * TAU
+    for i in range(max(4, n // 2)):
+        center = (-0.18 + i * 1.35 / max(1, max(4, n // 2) - 1)) * h
+        amp = h * (0.06 + 0.015 * ((i % 5)))
+        pts=[]
+        for k in range(200):
+            x = (-0.15 + 1.30 * k / 199) * w
+            t = x / w
+            y = center + amp * math.sin(TAU * (t * (0.75 + i * 0.02)) + phase + i * 0.45)
+            pts.append((x, y))
+        paths.append(_path(pts))
+        pts2=[(x, y + h * 0.035) for x, y in pts]
+        paths.append(_path(pts2))
+    return paths
+
+
+def _diamond_lattice(w: int, h: int, n: int, rng: random.Random) -> list[str]:
+    paths=[]
+    spacing = min(w, h) / max(5, n * 0.42)
+    cols = int((w / spacing) + 6)
+    rows = int((h / spacing) + 6)
+    for r in range(-3, rows):
+        for c in range(-3, cols):
+            cx = c * spacing
+            cy = r * spacing
+            pts=[(cx, cy - spacing * 0.52), (cx + spacing * 0.52, cy), (cx, cy + spacing * 0.52), (cx - spacing * 0.52, cy)]
+            paths.append(_path(pts, closed=True))
+    return paths
+
+
+def _chevron_field(w: int, h: int, n: int, rng: random.Random) -> list[str]:
+    paths=[]
+    rows = max(6, n // 2)
+    spacing = h / max(4, rows)
+    width = w / max(4, n // 3)
+    for j in range(-1, rows + 2):
+        y = j * spacing
+        pts=[]
+        for i in range(-2, int(w / width) + 4):
+            x = i * width
+            pts.extend([(x - width * 0.5, y - spacing * 0.35), (x, y + spacing * 0.35), (x + width * 0.5, y - spacing * 0.35)])
+        paths.append(_path(pts))
+    return paths
+
+
+def _sunburst_rays(w: int, h: int, n: int, rng: random.Random) -> list[str]:
+    paths=[]
+    cx = w * rng.uniform(-0.15, 0.2)
+    cy = h * rng.uniform(0.65, 1.15)
+    radius = math.hypot(w, h) * 1.4
+    start = rng.uniform(-1.2, -0.5)
+    sweep = rng.uniform(1.0, 1.8)
+    for i in range(max(10, n * 2)):
+        a = start + sweep * i / max(1, max(10, n * 2) - 1)
+        x2 = cx + radius * math.cos(a)
+        y2 = cy + radius * math.sin(a)
+        paths.append(_path([(cx, cy), (x2, y2)]))
+    return paths
+
+
+def _nested_rectangles(w: int, h: int, n: int, rng: random.Random) -> list[str]:
+    out=[]
+    count = max(6, n)
+    cx = w * (0.5 + rng.uniform(-0.04, 0.04))
+    cy = h * (0.5 + rng.uniform(-0.04, 0.04))
+    for i in range(count):
+        t = (i + 1) / count
+        rw = w * (0.12 + 0.86 * t)
+        rh = h * (0.10 + 0.80 * t)
+        x1 = cx - rw / 2
+        y1 = cy - rh / 2
+        x2 = cx + rw / 2
+        y2 = cy + rh / 2
+        out.append(_path([(x1,y1),(x2,y1),(x2,y2),(x1,y2)], closed=True))
+    return out
+
+
+def _orbit_ellipses(w: int, h: int, n: int, rng: random.Random) -> list[str]:
+    out=[]
+    cx = w * 0.55
+    cy = h * 0.48
+    count = max(5, n // 2)
+    for i in range(count):
+        t = (i + 1) / count
+        rx = w * (0.10 + 0.64 * t)
+        ry = h * (0.06 + 0.36 * t)
+        angle = math.radians(-28 + (i % 6) * 10 + rng.uniform(-4, 4))
+        ct, st = math.cos(angle), math.sin(angle)
+        pts=[]
+        for k in range(97):
+            a = TAU*k/96
+            x, y = rx*math.cos(a), ry*math.sin(a)
+            pts.append((cx + ct*x - st*y, cy + st*x + ct*y))
+        out.append(_path(pts, closed=True))
+    return out
+
+
+def _arc_lattice(w: int, h: int, n: int, rng: random.Random) -> list[str]:
+    out=[]
+    base_x = w * rng.uniform(-0.25, 0.15)
+    base_y = h * rng.uniform(0.85, 1.2)
+    cols = max(6, n // 2)
+    rows = max(4, n // 4)
+    for j in range(rows):
+        ry = h * (0.14 + 0.16 * j)
+        for i in range(cols):
+            rx = w * (0.08 + 0.10 * i)
+            pts=[]
+            start = -1.05
+            end = 0.15
+            for k in range(48):
+                a = start + (end - start) * k / 47
+                pts.append((base_x + rx * math.cos(a), base_y + ry * math.sin(a)))
+            out.append(_path(pts))
+    return out
+
 def _dot_field(w: int, h: int, n: int, rng: random.Random) -> list[str]:
     nx=max(6,n+5)
     ny=max(4,round(nx*h/w))
@@ -278,6 +445,15 @@ _RENDERERS = {
     "Perspective fan": _perspective_fan,
     "Hexagon grid": _hexagon_grid,
     "Dot field": _dot_field,
+    "Diagonal stripes": _diagonal_stripes,
+    "Concentric rings": _concentric_rings,
+    "Ribbon bands": _ribbon_bands,
+    "Diamond lattice": _diamond_lattice,
+    "Chevron field": _chevron_field,
+    "Sunburst rays": _sunburst_rays,
+    "Nested rectangles": _nested_rectangles,
+    "Orbit ellipses": _orbit_ellipses,
+    "Arc lattice": _arc_lattice,
 }
 
 
@@ -319,9 +495,18 @@ def _viewport_bounds(w: int, h: int, layer: dict[str, Any]) -> tuple[float, floa
     corners = []
     # Add a physical margin so antialiased strokes never end exactly at edges.
     for xx in (-max(24, .06*w), w+max(24, .06*w)):
-        for yy in (-max(24, .06*h), h+max(24, .06*h)):
-            u, v = (xx-cx-dx)/scale, (yy-cy-dy)/scale
-            corners.append((cx+ct*u+st*v, cy-st*u+ct*v))
+        # Inverse trapezoid geometry is nonlinear in y. Sample the full screen
+        # edge rather than only four corners to avoid unexpected cut-offs.
+        if warp_enabled(layer):
+            ys = [-max(24, .06*h) + (h+2*max(24, .06*h))*i/12 for i in range(13)]
+        else:
+            ys = (-max(24, .06*h), h+max(24, .06*h))
+        for yy in ys:
+            if warp_enabled(layer):
+                corners.append(untransformed_point(xx, yy, w, h, layer))
+            else:
+                u, v = (xx-cx-dx)/scale, (yy-cy-dy)/scale
+                corners.append((cx+ct*u+st*v, cy-st*u+ct*v))
     return (min(x for x,y in corners), max(x for x,y in corners),
             min(y for x,y in corners), max(y for x,y in corners))
 
@@ -363,6 +548,53 @@ def _web_long_lines(w: int, h: int, n: int, rng: random.Random,
                 t=(x/w+.15)/1.3
                 pts.append((x,base+.105*h*math.sin(TAU*.8*t+phase*.8+i*.14)))
             paths.append(_path(pts))
+    elif kind == "Diagonal stripes":
+        slope = .55 + rng.random()*.42
+        spacing = (w+h)/max(8,n+3)
+        low = xlo + slope*ylo - spacing*2
+        high = xhi + slope*yhi + spacing*2
+        first = math.floor(low/spacing)
+        last = math.ceil(high/spacing)
+        for i in range(first,last+1):
+            off = i*spacing
+            paths.append(_path([(off-slope*(ylo-.2*yspan), ylo-.2*yspan),
+                                (off-slope*(yhi+.2*yspan), yhi+.2*yspan)]))
+    elif kind == "Ribbon bands":
+        count=max(4,n//2)
+        for i in range(count):
+            level=(-.18+i*1.35/max(1,count-1))*h
+            amp=h*(.06+.015*(i%5))
+            for band in (0,.035*h):
+                pts=[]
+                for k in range(241):
+                    x=xlo+xspan*k/240
+                    t=x/w
+                    y=level+amp*math.sin(TAU*t*(.75+i*.02)+phase+i*.45)+band
+                    pts.append((x,y))
+                paths.append(_path(pts))
+    elif kind == "Chevron field":
+        rows=max(6,n//2)
+        spacing=h/max(4,rows)
+        period=w/max(4,n//3)
+        first=math.floor(ylo/spacing)-2
+        last=math.ceil(yhi/spacing)+2
+        x_first=math.floor(xlo/period)-3
+        x_last=math.ceil(xhi/period)+3
+        for j in range(first,last+1):
+            y=j*spacing
+            pts=[]
+            for i in range(x_first,x_last+1):
+                x=i*period
+                pts.extend([(x-period*.5,y-spacing*.35),(x,y+spacing*.35),
+                            (x+period*.5,y-spacing*.35)])
+            paths.append(_path(pts))
+    elif kind == "Sunburst rays":
+        cx,cy=-.4*w,1.4*h
+        radius=3*max(math.hypot(x-cx,y-cy) for x in (xlo,xhi) for y in (ylo,yhi))
+        start,sweep=-1.1,1.55
+        for i in range(max(10,n*2)):
+            a=start+sweep*i/max(1,max(10,n*2)-1)
+            paths.append(_path([(cx,cy),(cx+radius*math.cos(a),cy+radius*math.sin(a))]))
     elif kind == "Perspective fan":
         # The old fan joined paths to an *inside-canvas* point, so every line
         # visibly ended there. The focus is now outside and each curve continues
@@ -474,7 +706,8 @@ def _web_mesh(w:int,h:int,n:int,rng:random.Random,
 
 def _web_shapes(w:int,h:int,n:int,rng:random.Random,kind:str,
                 bounds:tuple[float,float,float,float]) -> list[str]:
-    if kind in ("Flowing waves","Curved grid","Perspective fan"):
+    if kind in ("Flowing waves","Curved grid","Perspective fan","Diagonal stripes",
+                "Ribbon bands","Chevron field","Sunburst rays"):
         return _web_long_lines(w,h,n,rng,kind,bounds)
     if kind in ("Triangle mesh","Hexagon grid","Dot field"):
         return _web_mesh(w,h,n,rng,bounds,kind)
@@ -584,13 +817,17 @@ def render_svg(
         angle = float(layer.get("rotation",0))
         transform = (f'translate({x:.1f} {y:.1f}) translate({width/2:.1f} {height/2:.1f}) '
                      f'rotate({angle:.1f}) scale({scale:.3f}) translate({-width/2:.1f} {-height/2:.1f})')
+        if warp_enabled(layer):
+            shapes = warp_shapes(shapes, width, height, layer)
+            transform = None
         blend = layer.get("blend", "normal")
         if blend not in ("normal", "screen", "multiply", "overlay"):
             raise ValueError(f"Unknown blend mode: {blend}")
         blend_style = f' style="mix-blend-mode:{blend}"' if blend != "normal" else ""
+        transform_attr = f' transform="{transform}"' if transform is not None else ""
         artwork.append(
             f'<g{mask}{blend_style}>'
-            f'<g transform="{transform}" color="{color}" stroke="{color}" '
+            f'<g{transform_attr} color="{color}" stroke="{color}" '
             f'stroke-width="{stroke_width:.2f}" fill="none" opacity="{opacity:.3f}" '
             'stroke-linecap="round" stroke-linejoin="round">'
             + ''.join(shapes) + '</g></g>'
